@@ -144,3 +144,47 @@ def test_cli_simulate_no_perturb_has_no_response_bundle(bilan_file: Path) -> Non
     assert result.returncode == 0
     parsed = json.loads(result.stdout)
     assert "response" not in parsed
+
+
+def test_cli_calibrate_emits_map_and_confidence_intervals(bilan_file: Path) -> None:
+    result = _run_cli("calibrate", str(bilan_file), "--bootstrap", "5", "--seed", "1")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert set(parsed["map"]["growth"]) == set(PANEL)
+    for pop in PANEL:
+        lo, hi = parsed["confidence_intervals"][pop]
+        assert lo <= hi
+        assert parsed["map"]["growth"][pop] > 0
+    assert parsed["n_bootstrap"] == 5
+    assert parsed["converged"] is True
+    assert isinstance(parsed["mse"], float)
+
+
+def test_cli_calibrate_writes_params_file(bilan_file: Path, tmp_path: Path) -> None:
+    out = tmp_path / "params.json"
+    result = _run_cli("calibrate", str(bilan_file), "--bootstrap", "5", "--seed", "1", "--out", str(out))
+    assert result.returncode == 0
+    assert out.is_file()
+
+
+def test_cli_simulate_with_calibrated_params_is_consumable(bilan_file: Path, tmp_path: Path) -> None:
+    out = tmp_path / "params.json"
+    _run_cli("calibrate", str(bilan_file), "--bootstrap", "3", "--seed", "1", "--out", str(out))
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "10", "--params", str(out))
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert set(parsed["populations"]) == set(PANEL)
+    cd8 = parsed["populations"]["CD8"]
+    assert len(cd8["times"]) == len(cd8["values"])
+
+
+def test_cli_simulate_with_ci_emits_confidence_bands(bilan_file: Path, tmp_path: Path) -> None:
+    out = tmp_path / "params.json"
+    _run_cli("calibrate", str(bilan_file), "--bootstrap", "3", "--seed", "1", "--out", str(out))
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "5", "--params", str(out), "--with-ci")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    cd8 = parsed["populations"]["CD8"]
+    assert "ci_lo" in cd8 and "ci_hi" in cd8
+    assert len(cd8["ci_lo"]) == len(cd8["times"])
+    assert all(lo <= hi for lo, hi in zip(cd8["ci_lo"], cd8["ci_hi"]))
