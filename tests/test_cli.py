@@ -190,6 +190,46 @@ def test_cli_simulate_with_ci_emits_confidence_bands(bilan_file: Path, tmp_path:
     assert all(lo <= hi for lo, hi in zip(cd8["ci_lo"], cd8["ci_hi"]))
 
 
+def test_cli_full_pipeline_bilan_then_calibrate_then_simulate_then_score(bilan_file: Path, tmp_path: Path) -> None:
+    """US #25 — drive the whole chain (bilan → calibration → simulation → score) via the CLI."""
+    read_result = _run_cli("bilan", str(bilan_file))
+    assert read_result.returncode == 0
+    assert set(json.loads(read_result.stdout)["populations"]) == set(PANEL)
+
+    params = tmp_path / "params.json"
+    cal_result = _run_cli("calibrate", str(bilan_file), "--bootstrap", "3", "--seed", "1",
+                          "--out", str(params))
+    assert cal_result.returncode == 0
+    assert params.is_file()
+
+    sim_result = _run_cli("simulate", str(bilan_file), "--horizon", "10",
+                          "--params", str(params), "--perturb", "anti-TNF")
+    assert sim_result.returncode == 0
+    parsed = json.loads(sim_result.stdout)
+    assert set(parsed["perturbed"]["populations"]) == set(PANEL)
+    assert "response" in parsed
+    score = parsed["response"]["score"]
+    assert isinstance(score, float)
+    assert parsed["response"]["therapy"] == "anti-TNF"
+
+
+def test_cli_what_if_compares_scores_across_therapies(bilan_file: Path) -> None:
+    """US #27 — explore treatment alternatives by scoring each therapy via the CLI."""
+    scores = {}
+    for therapy in ("anti-PD1", "anti-TNF", "corticoide"):
+        result = _run_cli("simulate", str(bilan_file), "--horizon", "20",
+                          "--perturb", therapy)
+        assert result.returncode == 0
+        parsed = json.loads(result.stdout)
+        assert parsed["perturbation"] == therapy
+        scores[therapy] = parsed["response"]["score"]
+    assert set(scores) == {"anti-PD1", "anti-TNF", "corticoide"}
+    assert all(isinstance(v, float) for v in scores.values())
+    # a clinician must be able to rank the alternatives — the scores must carry
+    # real signal, i.e. the therapies must not all produce the identical number
+    assert min(scores.values()) != max(scores.values())
+
+
 def test_cli_bilan_emits_csv_with_columns_and_rows(bilan_file: Path) -> None:
     result = _run_cli("bilan", str(bilan_file), "--format", "csv")
     assert result.returncode == 0
