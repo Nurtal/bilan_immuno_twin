@@ -13,6 +13,14 @@ import numpy as np
 from bilan_immuno_twin.bilan import BilanError, parse_bilan
 from bilan_immuno_twin.calibration import calibrate, parameters_from_growth
 from bilan_immuno_twin.graph import KineticParameters, POPULATIONS
+from bilan_immuno_twin.output import (
+    calibration_csv,
+    comparison_csv,
+    metadata_csv,
+    populations_csv,
+    response_csv,
+    trajectory_csv,
+)
 from bilan_immuno_twin.perturbation import PerturbationError, apply_perturbation, canonical_name, get_perturbation
 from bilan_immuno_twin.response import evaluate_response, reference_score
 from bilan_immuno_twin.simulation import default_initial_state, simulate
@@ -55,14 +63,18 @@ def _bootstrap_ci_band(
     horizon: float,
     perturb: str | None,
     max_draws: int = 30,
+    grid: np.ndarray | None = None,
 ) -> dict:
     """95% percentile band over the bootstrap parameter draws for each population.
 
     Each bootstrap growth draw is simulated over the same horizon (with the same
-    perturbation applied) and interpolated onto a shared time grid; the 2.5th
-    and 97.5th percentiles across draws form the band.
+    perturbation applied) and interpolated onto ``grid`` (default: a fixed
+    200-point grid over the horizon); the 2.5th and 97.5th percentiles across
+    draws form the band. Pass the trajectory's own time points so the band
+    aligns with it (e.g. under ``--adaptive``, where the trajectory stops early).
     """
-    grid = np.linspace(0.0, horizon, 200)
+    if grid is None:
+        grid = np.linspace(0.0, horizon, 200)
     draws = bootstrap_values[:max_draws]
     per_pop = {pop: np.empty((len(draws), grid.size), dtype=float) for pop in POPULATIONS}
     for d, draw in enumerate(draws):
@@ -90,6 +102,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_bilan = sub.add_parser("bilan", help="read a bilan immunologique and emit the measured populations")
     p_bilan.add_argument("bilan_file", help="path to the bilan immunologique file (JSON)")
+    p_bilan.add_argument("--format", choices=("json", "csv"), default="json",
+                         help="output format (csv for downstream tooling)")
     p_bilan.set_defaults(func=_cmd_bilan)
 
     p_sim = sub.add_parser("simulate", help="simulate immune population dynamics from a bilan")
@@ -102,6 +116,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="calibrated parameters file (calibrate output or {\"growth\": {...}})")
     p_sim.add_argument("--with-ci", action="store_true",
                        help="emit 95% confidence bands from the bootstrap draws in --params")
+    p_sim.add_argument("--format", choices=("json", "csv"), default="json",
+                       help="output format (csv = long-format trajectories for downstream tooling)")
     p_sim.set_defaults(func=_cmd_simulate)
 
     p_val = sub.add_parser("validate", help="validate the model on synthetic data (self-consistency + regression snapshot)")
@@ -117,6 +133,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cal.add_argument("--seed", type=int, default=None, help="random seed for reproducibility")
     p_cal.add_argument("--out", metavar="JSON", default=None,
                        help="write the calibration result to a JSON file")
+    p_cal.add_argument("--format", choices=("json", "csv"), default="json",
+                       help="output format (csv for downstream tooling)")
     p_cal.set_defaults(func=_cmd_calibrate)
     return parser
 
@@ -147,7 +165,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         drift = compare_snapshot(reference, regression_snapshot())
         output["regression_check"] = {"passed": not any(drift.values()), "drift": drift}
         if drift["simulation"] or drift["calibration"]:
-            status = 3 if status != 2 else status
+            status = 3
         print(json.dumps(output, indent=2))
         return status
 
@@ -157,7 +175,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 def _cmd_bilan(args: argparse.Namespace) -> int:
     populations = parse_bilan(args.bilan_file)
-    print(json.dumps({"populations": populations}, sort_keys=True))
+    if args.format == "csv":
+        print(populations_csv(populations), end="")
+    else:
+        print(json.dumps({"populations": populations}, sort_keys=True))
     return 0
 
 
@@ -216,8 +237,41 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
             perturb=args.perturb,
         )
 
-    print(json.dumps(output))
+    if args.format == "csv":
+        _emit_tables(*_simulate_tables(args, output))
+    else:
+        print(json.dumps(output))
     return 0
+
+
+def _emit_tables(*tables: str) -> None:
+    """Print CSV tables, headed and separated by blank lines (see AGENTS.md)."""
+    print("\n".join(tables), end="")
+
+
+def _simulate_tables(args: argparse.Namespace, output: dict) -> list[str]:
+    """CSV tables for a simulate output.
+
+    Returns the trajectory table(s) and, when a perturbation was applied, the
+    comparison and score de réponse tables (each headed, to be joined by a blank
+    line by the caller) so the CSV stream carries the same signal as the JSON
+    output.
+    """
+    if args.perturb:
+        return [
+            trajectory_csv(output["unperturbed"], scenario="unperturbed"),
+            trajectory_csv(output["perturbed"], scenario="perturbed", include_header=False),
+            comparison_csv(output["comparison"]),
+            response_csv(output["response"]),
+            metadata_csv({
+                "perturbation": output["perturbation"],
+                **{
+                    f"parameter_changes:{identifier}": entry["interpretation"]
+                    for identifier, entry in output["parameter_changes"].items()
+                },
+            }),
+        ]
+    return [trajectory_csv(output, scenario="baseline")]
 
 
 def _cmd_calibrate(args: argparse.Namespace) -> int:
@@ -238,7 +292,17 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     }
     if args.out:
         Path(args.out).write_text(json.dumps(output, indent=2), encoding="utf-8")
-    print(json.dumps(output))
+    if args.format == "csv":
+        _emit_tables(
+            calibration_csv(output["map"]["growth"], output["confidence_intervals"]),
+            metadata_csv({
+                "n_bootstrap": output["n_bootstrap"],
+                "converged": output["converged"],
+                "mse": output["mse"],
+            }),
+        )
+    else:
+        print(json.dumps(output))
     return 0
 
 
@@ -248,7 +312,7 @@ def _simulate_output(params: KineticParameters, x0: np.ndarray, horizon: float,
     trj = simulate(params, x0, horizon=horizon, adaptive=adaptive)
     ci = None
     if bootstrap_values:
-        ci = _bootstrap_ci_band(bootstrap_values, x0, horizon, perturb)
+        ci = _bootstrap_ci_band(bootstrap_values, x0, horizon, perturb, grid=trj.times)
     output = _trajectory_to_dict(trj.times, trj.values, ci=ci)
     output["stopped_early"] = trj.stopped_early
     output["message"] = trj.message
@@ -297,6 +361,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (BilanError, PerturbationError, ValueError) as exc:
         print(f"bilan: error: {exc}", file=sys.stderr)
         return 2
+    except BrokenPipeError:
+        # Downstream consumer closed the pipe (e.g. `bilan ... | head`): the
+        # intended behaviour is to stop writing quietly, like Unix tools.
+        try:
+            sys.stderr.close()
+        except OSError:
+            pass
+        return 141
 
 
 if __name__ == "__main__":

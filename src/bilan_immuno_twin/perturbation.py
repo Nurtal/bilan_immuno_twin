@@ -65,9 +65,12 @@ def _accentless(name: str) -> str:
     return "".join(char for char in decomposed if not unicodedata.combining(char))
 
 
+_CANONICAL_BY_ACCENTLESS = {_accentless(key): key for key in PERTURBATION_CATALOGUE}
+
+
 def canonical_name(name: str) -> str:
     """Canonical catalogue key for a therapy name (accents optional)."""
-    match = {_accentless(key): key for key in PERTURBATION_CATALOGUE}.get(_accentless(name))
+    match = _CANONICAL_BY_ACCENTLESS.get(_accentless(name))
     if match is None:
         known = ", ".join(sorted(PERTURBATION_CATALOGUE))
         raise PerturbationError(f"unknown perturbation '{name}'; known: {known}")
