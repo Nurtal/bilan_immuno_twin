@@ -105,3 +105,21 @@ def test_cli_simulate_all_populations_finite(bilan_file: Path) -> None:
     parsed = json.loads(result.stdout)
     for pop in PANEL:
         assert all(isinstance(v, (int, float)) for v in parsed["populations"][pop]["values"])
+
+
+def test_cli_simulate_with_perturb_emits_comparison(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28", "--perturb", "anti-PD1")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["perturbation"] == "anti-PD1"
+    assert parsed["parameter_changes"]["growth:CD8"]["delta"] == 0.40
+    assert set(parsed["unperturbed"]["populations"]) == set(PANEL)
+    assert set(parsed["perturbed"]["populations"]) == set(PANEL)
+    assert set(parsed["comparison"]) == set(PANEL)
+    assert parsed["comparison"]["CD8"]["direction"] in ("up", "down", "flat")
+
+
+def test_cli_simulate_unknown_perturb_fails_clearly(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--perturb", "vaccine-x")
+    assert result.returncode == 2
+    assert "unknown perturbation" in result.stderr
