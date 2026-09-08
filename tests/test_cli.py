@@ -188,3 +188,73 @@ def test_cli_simulate_with_ci_emits_confidence_bands(bilan_file: Path, tmp_path:
     assert "ci_lo" in cd8 and "ci_hi" in cd8
     assert len(cd8["ci_lo"]) == len(cd8["times"])
     assert all(lo <= hi for lo, hi in zip(cd8["ci_lo"], cd8["ci_hi"]))
+
+
+def test_cli_bilan_emits_csv_with_columns_and_rows(bilan_file: Path) -> None:
+    result = _run_cli("bilan", str(bilan_file), "--format", "csv")
+    assert result.returncode == 0
+    lines = result.stdout.strip().splitlines()
+    assert lines[0] == "population,value"
+    assert len(lines) == len(PANEL) + 1
+    assert "CD8,0.15" in lines[1]
+
+
+def test_cli_simulate_emits_long_format_csv(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "2", "--format", "csv")
+    assert result.returncode == 0
+    lines = result.stdout.strip().splitlines()
+    header, rows = lines[0], lines[1:]
+    assert header == "time,scenario,population,value"
+    assert rows[0].startswith("0.0,baseline,CD8,")
+    assert len(rows) == 200 * len(PANEL)  # 200 grid points over the horizon
+    assert all("baseline" in row for row in rows)
+
+
+def test_cli_simulate_csv_covers_unperturbed_and_perturbed_scenarios(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "2", "--format", "csv",
+                      "--perturb", "anti-TNF")
+    assert result.returncode == 0
+    # only the trajectory table rows carry a scenario (times start at 0.0)
+    scenarios = {
+        row.split(",")[1]
+        for row in result.stdout.splitlines()
+        if row.startswith("0.0,")
+    }
+    assert scenarios == {"unperturbed", "perturbed"}
+
+
+def test_cli_simulate_csv_perturb_also_emits_comparison_and_score(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "2", "--format", "csv",
+                      "--perturb", "anti-PD1")
+    assert result.returncode == 0
+    assert "population,fold_change,direction" in result.stdout
+    header = ("therapy,score,interpretation,reference_score,"
+              "is_differential,unexpected_populations")
+    assert header in result.stdout
+
+
+def test_cli_simulate_csv_no_perturb_has_no_score_table(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "2", "--format", "csv")
+    assert result.returncode == 0
+    assert "therapy,score" not in result.stdout
+
+
+def test_cli_calibrate_emits_csv_with_estimate_and_intervals(bilan_file: Path) -> None:
+    result = _run_cli("calibrate", str(bilan_file), "--bootstrap", "3", "--seed", "1",
+                      "--format", "csv")
+    assert result.returncode == 0
+    lines = result.stdout.strip().splitlines()
+    assert lines[0] == "population,growth,ci_lo,ci_hi"
+    cd8 = [col for col in lines[1].split(",")]
+    assert cd8[0] == "CD8"
+    assert float(cd8[1]) > 0.0
+    # a second metadata table carries the calibration quality signal
+    assert "key,value" in result.stdout
+    assert "n_bootstrap,3" in result.stdout
+    assert "converged," in result.stdout
+
+
+def test_cli_rejects_unknown_format(bilan_file: Path) -> None:
+    result = _run_cli("bilan", str(bilan_file), "--format", "xml")
+    assert result.returncode == 2
+    assert "format" in result.stderr.lower()
