@@ -126,8 +126,7 @@ def regression_snapshot() -> dict:
 def compare_snapshot(reference: dict, current: dict, rel_tol: float = 1e-4) -> dict:
     """Compare two snapshots and report which fields drift beyond tolerance.
 
-    A section or population missing from the reference fixture counts as drift
-    (the fixture is stale relative to the current model).
+    A section or population missing from either side counts as drift.
     """
     drift: dict[str, dict[str, float]] = {}
     for section in ("simulation", "calibration"):
@@ -139,7 +138,7 @@ def compare_snapshot(reference: dict, current: dict, rel_tol: float = 1e-4) -> d
             "final_populations" if section == "simulation" else "growth", {}
         )
         for pop in POPULATIONS:
-            if pop not in ref_pops:
+            if pop not in ref_pops or pop not in cur_pops:
                 drift[section][pop] = float("inf")
                 continue
             ref_value = ref_pops[pop] if isinstance(ref_pops[pop], (int, float)) else ref_pops[pop]["map"]

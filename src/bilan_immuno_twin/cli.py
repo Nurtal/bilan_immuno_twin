@@ -147,7 +147,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         drift = compare_snapshot(reference, regression_snapshot())
         output["regression_check"] = {"passed": not any(drift.values()), "drift": drift}
         if drift["simulation"] or drift["calibration"]:
-            status = 3 if status != 2 else status
+            status = 3
         print(json.dumps(output, indent=2))
         return status
 
