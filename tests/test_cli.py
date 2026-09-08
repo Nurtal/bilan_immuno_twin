@@ -1,0 +1,190 @@
+"""Integration tests driving the CLI end-to-end (primary seam)."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from bilan_immuno_twin.bilan import PANEL
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "bilan_immuno_twin.cli", *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.fixture()
+def bilan_file(tmp_path: Path) -> Path:
+    payload = {
+        "populations": {
+            "CD8": 0.15,
+            "Th1": 0.04,
+            "Th2": 0.06,
+            "Th17": 0.03,
+            "B": 0.12,
+            "NK": 0.09,
+            "Treg": 0.02,
+            "Monocytes": 0.11,
+        }
+    }
+    path = tmp_path / "bilan.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_cli_bilan_emits_populations_as_json(bilan_file: Path) -> None:
+    result = _run_cli("bilan", str(bilan_file))
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert set(parsed["populations"]) == set(PANEL)
+    assert parsed["populations"]["CD8"] == 0.15
+
+
+def test_cli_bilan_missing_population_prints_error_and_fails(bilan_file: Path) -> None:
+    payload = json.loads(bilan_file.read_text(encoding="utf-8"))
+    del payload["populations"]["NK"]
+    bilan_file.write_text(json.dumps(payload), encoding="utf-8")
+    result = _run_cli("bilan", str(bilan_file))
+    assert result.returncode == 2
+    assert "NK" in result.stderr
+
+
+def test_cli_bilan_missing_file_fails(bilan_file: Path) -> None:
+    result = _run_cli("bilan", str(bilan_file.parent / "absent.json"))
+    assert result.returncode == 2
+    assert "not found" in result.stderr
+
+
+def test_cli_provides_help() -> None:
+    result = _run_cli("--help")
+    assert result.returncode == 0
+    assert "bilan" in result.stdout
+
+
+def test_cli_simulate_emits_trajectories_as_json(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert set(parsed["populations"]) == set(PANEL)
+    cd8 = parsed["populations"]["CD8"]
+    assert len(cd8["times"]) == len(cd8["values"])
+    assert len(cd8["times"]) >= 2
+    assert cd8["times"][0] == 0.0
+    assert abs(cd8["times"][-1] - 28.0) < 1e-6
+    assert parsed["t_units"] == "days"
+
+
+def test_cli_simulate_adaptive_flag_stops_at_steady_state(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "400", "--adaptive")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["stopped_early"] is True
+    cd8 = parsed["populations"]["CD8"]
+    assert cd8["times"][-1] < 400.0
+
+
+def test_cli_simulate_adaptive_flag_false_does_not_stop(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "100")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["stopped_early"] is False
+    cd8 = parsed["populations"]["CD8"]
+    assert abs(cd8["times"][-1] - 100.0) < 1e-6
+
+
+def test_cli_simulate_all_populations_finite(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    for pop in PANEL:
+        assert all(isinstance(v, (int, float)) for v in parsed["populations"][pop]["values"])
+
+
+def test_cli_simulate_with_perturb_emits_comparison(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28", "--perturb", "anti-PD1")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["perturbation"] == "anti-PD1"
+    assert parsed["parameter_changes"]["growth:CD8"]["delta"] == 0.40
+    assert set(parsed["unperturbed"]["populations"]) == set(PANEL)
+    assert set(parsed["perturbed"]["populations"]) == set(PANEL)
+    assert set(parsed["comparison"]) == set(PANEL)
+    assert parsed["comparison"]["CD8"]["direction"] in ("up", "down", "flat")
+
+
+def test_cli_simulate_unknown_perturb_fails_clearly(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--perturb", "vaccine-x")
+    assert result.returncode == 2
+    assert "unknown perturbation" in result.stderr
+
+
+def test_cli_simulate_emits_response_score_and_flags(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28", "--perturb", "anti-PD1")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    response = parsed["response"]
+    assert response["therapy"] == "anti-PD1"
+    assert isinstance(response["score"], float)
+    assert isinstance(response["reference_score"], float)
+    assert response["interpretation"] in ("favorable", "neutral", "unfavorable")
+    assert isinstance(response["is_differential"], bool)
+    assert isinstance(response["unexpected_populations"], list)
+    assert set(response["folds"]) == set(PANEL)
+
+
+def test_cli_simulate_no_perturb_has_no_response_bundle(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert "response" not in parsed
+
+
+def test_cli_calibrate_emits_map_and_confidence_intervals(bilan_file: Path) -> None:
+    result = _run_cli("calibrate", str(bilan_file), "--bootstrap", "5", "--seed", "1")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert set(parsed["map"]["growth"]) == set(PANEL)
+    for pop in PANEL:
+        lo, hi = parsed["confidence_intervals"][pop]
+        assert lo <= hi
+        assert parsed["map"]["growth"][pop] > 0
+    assert parsed["n_bootstrap"] == 5
+    assert parsed["converged"] is True
+    assert isinstance(parsed["mse"], float)
+
+
+def test_cli_calibrate_writes_params_file(bilan_file: Path, tmp_path: Path) -> None:
+    out = tmp_path / "params.json"
+    result = _run_cli("calibrate", str(bilan_file), "--bootstrap", "5", "--seed", "1", "--out", str(out))
+    assert result.returncode == 0
+    assert out.is_file()
+
+
+def test_cli_simulate_with_calibrated_params_is_consumable(bilan_file: Path, tmp_path: Path) -> None:
+    out = tmp_path / "params.json"
+    _run_cli("calibrate", str(bilan_file), "--bootstrap", "3", "--seed", "1", "--out", str(out))
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "10", "--params", str(out))
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert set(parsed["populations"]) == set(PANEL)
+    cd8 = parsed["populations"]["CD8"]
+    assert len(cd8["times"]) == len(cd8["values"])
+
+
+def test_cli_simulate_with_ci_emits_confidence_bands(bilan_file: Path, tmp_path: Path) -> None:
+    out = tmp_path / "params.json"
+    _run_cli("calibrate", str(bilan_file), "--bootstrap", "3", "--seed", "1", "--out", str(out))
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "5", "--params", str(out), "--with-ci")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    cd8 = parsed["populations"]["CD8"]
+    assert "ci_lo" in cd8 and "ci_hi" in cd8
+    assert len(cd8["ci_lo"]) == len(cd8["times"])
+    assert all(lo <= hi for lo, hi in zip(cd8["ci_lo"], cd8["ci_hi"]))
