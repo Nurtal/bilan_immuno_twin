@@ -16,6 +16,7 @@ from bilan_immuno_twin.graph import KineticParameters, POPULATIONS
 from bilan_immuno_twin.perturbation import PerturbationError, apply_perturbation, get_perturbation
 from bilan_immuno_twin.response import evaluate_response, reference_score
 from bilan_immuno_twin.simulation import default_initial_state, simulate
+from bilan_immuno_twin.validate import regression_snapshot, self_consistency
 
 POPULATION_LABELS = {
     "CD8": "CD8+ T",
@@ -99,6 +100,11 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="emit 95% confidence bands from the bootstrap draws in --params")
     p_sim.set_defaults(func=_cmd_simulate)
 
+    p_val = sub.add_parser("validate", help="validate the model on synthetic data (self-consistency + regression snapshot)")
+    p_val.add_argument("--seed", type=int, default=0, help="random seed for synthetic observations")
+    p_val.add_argument("--bootstrap", type=int, default=50, help="number of bootstrap resamples in the recalibration")
+    p_val.set_defaults(func=_cmd_validate)
+
     p_cal = sub.add_parser("calibrate", help="MAP-calibrate patient-specific kinetic parameters from a bilan")
     p_cal.add_argument("bilan_file", help="path to the bilan immunologique file (JSON)")
     p_cal.add_argument("--bootstrap", type=int, default=100, help="number of bootstrap resamples")
@@ -107,6 +113,25 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="write the calibration result to a JSON file")
     p_cal.set_defaults(func=_cmd_calibrate)
     return parser
+
+
+def _cmd_validate(args: argparse.Namespace) -> int:
+    result = self_consistency(seed=args.seed, n_bootstrap=args.bootstrap)
+    output = {
+        "mode": "self-consistency",
+        "passed": result.passed,
+        "max_relative_error": result.max_relative_error,
+        "mean_relative_error": result.mean_relative_error,
+        "ci_coverage": f"{result.ci_coverage}/{len(POPULATIONS)}",
+        "tolerance_relative": 0.25,
+        "per_population": {pop: float(err) for pop, err in result.per_population.items()},
+        "confidence_intervals": {
+            pop: [float(lo), float(hi)]
+            for pop, (lo, hi) in result.confidence_intervals.items()
+        },
+    }
+    print(json.dumps(output, indent=2))
+    return 0 if result.passed else 3
 
 
 def _cmd_bilan(args: argparse.Namespace) -> int:
