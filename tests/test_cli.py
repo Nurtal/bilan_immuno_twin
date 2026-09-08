@@ -66,3 +66,42 @@ def test_cli_provides_help() -> None:
     result = _run_cli("--help")
     assert result.returncode == 0
     assert "bilan" in result.stdout
+
+
+def test_cli_simulate_emits_trajectories_as_json(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert set(parsed["populations"]) == set(PANEL)
+    cd8 = parsed["populations"]["CD8"]
+    assert len(cd8["times"]) == len(cd8["values"])
+    assert len(cd8["times"]) >= 2
+    assert cd8["times"][0] == 0.0
+    assert abs(cd8["times"][-1] - 28.0) < 1e-6
+    assert parsed["t_units"] == "days"
+
+
+def test_cli_simulate_adaptive_flag_stops_at_steady_state(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "400", "--adaptive")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["stopped_early"] is True
+    cd8 = parsed["populations"]["CD8"]
+    assert cd8["times"][-1] < 400.0
+
+
+def test_cli_simulate_adaptive_flag_false_does_not_stop(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "100")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["stopped_early"] is False
+    cd8 = parsed["populations"]["CD8"]
+    assert abs(cd8["times"][-1] - 100.0) < 1e-6
+
+
+def test_cli_simulate_all_populations_finite(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    for pop in PANEL:
+        assert all(isinstance(v, (int, float)) for v in parsed["populations"][pop]["values"])
