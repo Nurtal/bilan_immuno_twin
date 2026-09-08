@@ -49,6 +49,12 @@ def test_unknown_therapy_raises_clear_error() -> None:
         get_perturbation("vax-covid")
 
 
+def test_accented_corticoïde_spelling_is_accepted() -> None:
+    accented = get_perturbation("corticoïde")
+    canonical = get_perturbation("corticoide")
+    assert accented == canonical
+
+
 def test_apply_relative_delta_multiplicative() -> None:
     params = KineticParameters.defaults()
     base = params.growth["CD8"]

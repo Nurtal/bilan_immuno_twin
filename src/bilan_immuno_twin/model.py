@@ -27,7 +27,7 @@ from bilan_immuno_twin.graph import (
 from bilan_immuno_twin.hill import hill
 
 STEADY_STATE_MAX_ITER = 500
-STEADY_STATE_TOL = 1e-12
+STEADY_STATE_X_TOL = 1e-12
 
 
 def cytokines_from_state(x: np.ndarray) -> dict[str, float]:
@@ -90,8 +90,7 @@ def steady_state(
     params: KineticParameters,
     x0: np.ndarray,
     max_iter: int = STEADY_STATE_MAX_ITER,
-    tol: float = STEADY_STATE_TOL,
-    x_tol: float = 1e-12,
+    x_tol: float = STEADY_STATE_X_TOL,
 ) -> np.ndarray:
     """Model steady state reached from ``x0``, by fixed-point iteration.
 

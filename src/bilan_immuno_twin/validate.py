@@ -20,16 +20,12 @@ import numpy as np
 from bilan_immuno_twin.calibration import calibrate
 from bilan_immuno_twin.graph import KineticParameters, POPULATIONS
 from bilan_immuno_twin.model import steady_state
+from bilan_immuno_twin.response import REFERENCE_BILAN
 from bilan_immuno_twin.simulation import default_initial_state, simulate
 
 DEFAULT_NOISE_SD = 0.05     # synthetic measurement noise (log scale) - careful
 DEFAULT_TOL_REL = 0.25      # recovery within ±25 % relative
 REGRESSION_HORIZON = 28.0
-
-REFERENCE_BILAN = {
-    "CD8": 0.15, "Th1": 0.04, "Th2": 0.06, "Th17": 0.03,
-    "B": 0.12, "NK": 0.09, "Treg": 0.02, "Monocytes": 0.11,
-}
 
 # Truths chosen near the prior so recovery is identifiable.
 TRUTH_GROWTH = dict(zip(POPULATIONS, [0.32, 0.36, 0.33, 0.38, 0.34, 0.31, 0.37, 0.35]))
@@ -128,13 +124,24 @@ def regression_snapshot() -> dict:
 
 
 def compare_snapshot(reference: dict, current: dict, rel_tol: float = 1e-4) -> dict:
-    """Compare two snapshots and report which fields drift beyond tolerance."""
+    """Compare two snapshots and report which fields drift beyond tolerance.
+
+    A section or population missing from the reference fixture counts as drift
+    (the fixture is stale relative to the current model).
+    """
     drift: dict[str, dict[str, float]] = {}
     for section in ("simulation", "calibration"):
         drift[section] = {}
-        ref_pops = reference[section]["final_populations"] if section == "simulation" else reference[section]["growth"]
-        cur_pops = current[section]["final_populations"] if section == "simulation" else current[section]["growth"]
+        ref_pops = (reference.get(section) or {}).get(
+            "final_populations" if section == "simulation" else "growth", {}
+        )
+        cur_pops = (current.get(section) or {}).get(
+            "final_populations" if section == "simulation" else "growth", {}
+        )
         for pop in POPULATIONS:
+            if pop not in ref_pops:
+                drift[section][pop] = float("inf")
+                continue
             ref_value = ref_pops[pop] if isinstance(ref_pops[pop], (int, float)) else ref_pops[pop]["map"]
             cur_value = cur_pops[pop] if isinstance(cur_pops[pop], (int, float)) else cur_pops[pop]["map"]
             relative = abs(cur_value - ref_value) / max(abs(ref_value), 1e-9)

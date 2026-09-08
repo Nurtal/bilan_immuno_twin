@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import re
+import unicodedata
 
 from bilan_immuno_twin.graph import CYTOKINES, KineticParameters, POPULATIONS
 
@@ -58,12 +59,24 @@ def known_perturbations() -> list[str]:
     return list(PERTURBATION_CATALOGUE)
 
 
-def get_perturbation(name: str) -> dict[str, float]:
-    """Return the parameter deltas for a named therapy."""
-    if name not in PERTURBATION_CATALOGUE:
+def _accentless(name: str) -> str:
+    """Strip diacritics so 'corticoïde' and 'corticoide' both match."""
+    decomposed = unicodedata.normalize("NFD", name)
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
+def canonical_name(name: str) -> str:
+    """Canonical catalogue key for a therapy name (accents optional)."""
+    match = {_accentless(key): key for key in PERTURBATION_CATALOGUE}.get(_accentless(name))
+    if match is None:
         known = ", ".join(sorted(PERTURBATION_CATALOGUE))
         raise PerturbationError(f"unknown perturbation '{name}'; known: {known}")
-    return dict(PERTURBATION_CATALOGUE[name])
+    return match
+
+
+def get_perturbation(name: str) -> dict[str, float]:
+    """Return the parameter deltas for a named therapy."""
+    return dict(PERTURBATION_CATALOGUE[canonical_name(name)])
 
 
 def set_parameter(params: KineticParameters, identifier: str, value: float) -> None:

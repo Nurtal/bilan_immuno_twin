@@ -13,10 +13,15 @@ import numpy as np
 from bilan_immuno_twin.bilan import BilanError, parse_bilan
 from bilan_immuno_twin.calibration import calibrate, parameters_from_growth
 from bilan_immuno_twin.graph import KineticParameters, POPULATIONS
-from bilan_immuno_twin.perturbation import PerturbationError, apply_perturbation, get_perturbation
+from bilan_immuno_twin.perturbation import PerturbationError, apply_perturbation, canonical_name, get_perturbation
 from bilan_immuno_twin.response import evaluate_response, reference_score
 from bilan_immuno_twin.simulation import default_initial_state, simulate
-from bilan_immuno_twin.validate import regression_snapshot, self_consistency
+from bilan_immuno_twin.validate import (
+    DEFAULT_TOL_REL,
+    compare_snapshot,
+    regression_snapshot,
+    self_consistency,
+)
 
 POPULATION_LABELS = {
     "CD8": "CD8+ T",
@@ -41,7 +46,6 @@ def _trajectory_to_dict(times, values, ci: dict | None = None) -> dict:
     return {
         "populations": populations,
         "t_units": "days",
-        "stopped_early": False,
     }
 
 
@@ -103,6 +107,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_val = sub.add_parser("validate", help="validate the model on synthetic data (self-consistency + regression snapshot)")
     p_val.add_argument("--seed", type=int, default=0, help="random seed for synthetic observations")
     p_val.add_argument("--bootstrap", type=int, default=50, help="number of bootstrap resamples in the recalibration")
+    p_val.add_argument("--regression-fixture", metavar="JSON", default=None,
+                       help="also check the current simulation/calibration snapshot against a fixture file")
     p_val.set_defaults(func=_cmd_validate)
 
     p_cal = sub.add_parser("calibrate", help="MAP-calibrate patient-specific kinetic parameters from a bilan")
@@ -123,15 +129,30 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         "max_relative_error": result.max_relative_error,
         "mean_relative_error": result.mean_relative_error,
         "ci_coverage": f"{result.ci_coverage}/{len(POPULATIONS)}",
-        "tolerance_relative": 0.25,
+        "tolerance_relative": DEFAULT_TOL_REL,
         "per_population": {pop: float(err) for pop, err in result.per_population.items()},
         "confidence_intervals": {
             pop: [float(lo), float(hi)]
             for pop, (lo, hi) in result.confidence_intervals.items()
         },
     }
+    status = 0 if result.passed else 3
+
+    if args.regression_fixture:
+        path = Path(args.regression_fixture)
+        if not path.is_file():
+            print(f"bilan: error: regression fixture not found: {path}", file=sys.stderr)
+            return 2
+        reference = json.loads(path.read_text(encoding="utf-8"))
+        drift = compare_snapshot(reference, regression_snapshot())
+        output["regression_check"] = {"passed": not any(drift.values()), "drift": drift}
+        if drift["simulation"] or drift["calibration"]:
+            status = 3 if status != 2 else status
+        print(json.dumps(output, indent=2))
+        return status
+
     print(json.dumps(output, indent=2))
-    return 0 if result.passed else 3
+    return status
 
 
 def _cmd_bilan(args: argparse.Namespace) -> int:
@@ -168,9 +189,10 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
 
     output = {}
     if args.perturb:
-        changes = get_perturbation(args.perturb)
+        therapy = canonical_name(args.perturb)
+        changes = get_perturbation(therapy)
         perturbed = apply_perturbation(baseline, changes)
-        output["perturbation"] = args.perturb
+        output["perturbation"] = therapy
         output["parameter_changes"] = {
             identifier: {"delta": delta, "interpretation": f"{delta * 100:+.0f}%"}
             for identifier, delta in changes.items()
@@ -178,15 +200,15 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
         output["unperturbed"] = _simulate_output(
             baseline, x0, horizon=args.horizon, adaptive=args.adaptive,
             bootstrap_values=bootstrap_values if args.with_ci else None,
-            perturb=args.perturb,
+            perturb=therapy,
         )
         output["perturbed"] = _simulate_output(
             perturbed, x0, horizon=args.horizon, adaptive=args.adaptive,
             bootstrap_values=bootstrap_values if args.with_ci else None,
-            perturb=args.perturb,
+            perturb=therapy,
         )
         output["comparison"] = _comparison(output["unperturbed"], output["perturbed"])
-        output["response"] = _response_summary(args.perturb, output, horizon=args.horizon)
+        output["response"] = _response_summary(therapy, output, horizon=args.horizon)
     else:
         output = _simulate_output(
             baseline, x0, horizon=args.horizon, adaptive=args.adaptive,
@@ -229,6 +251,7 @@ def _simulate_output(params: KineticParameters, x0: np.ndarray, horizon: float,
         ci = _bootstrap_ci_band(bootstrap_values, x0, horizon, perturb)
     output = _trajectory_to_dict(trj.times, trj.values, ci=ci)
     output["stopped_early"] = trj.stopped_early
+    output["message"] = trj.message
     return output
 
 

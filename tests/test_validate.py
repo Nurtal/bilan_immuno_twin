@@ -3,10 +3,7 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from bilan_immuno_twin.graph import KineticParameters, POPULATIONS
-from bilan_immuno_twin.model import steady_state
 from bilan_immuno_twin.simulation import default_initial_state, simulate
 from bilan_immuno_twin.validate import (
     DEFAULT_TOL_REL,
@@ -86,3 +83,23 @@ def test_cli_validate_subcommand(tmp_path):
 
     rc = main(["validate", "--seed", "0", "--bootstrap", "30"])
     assert rc == 0
+
+
+def test_cli_validate_regression_check_passes(tmp_path):
+    from bilan_immuno_twin.cli import main
+
+    rc = main(["validate", "--seed", "0", "--bootstrap", "20",
+               "--regression-fixture", str(FIXTURE)])
+    assert rc == 0
+
+
+def test_cli_validate_regression_check_fails_on_drift(tmp_path, capsys):
+    from bilan_immuno_twin.cli import main
+
+    fixture = tmp_path / "stale.json"
+    fixture.write_text(json.dumps({"calibration": _reference()["calibration"]}), encoding="utf-8")
+    rc = main(["validate", "--seed", "0", "--bootstrap", "20",
+               "--regression-fixture", str(fixture)])
+    assert rc == 3
+    out = json.loads(capsys.readouterr().out)
+    assert out["regression_check"]["passed"] is False

@@ -147,7 +147,7 @@ def calibrate(
         growth_estimates=growth_estimates,
         confidence_intervals=confidence_intervals,
         bootstrap_values=bootstrap_values,
-        converged=True,
+        converged=not infeasible,
         mse=mse,
         infeasible=infeasible,
     )

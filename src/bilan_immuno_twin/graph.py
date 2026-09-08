@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-POPULATIONS = ["CD8", "Th1", "Th2", "Th17", "B", "NK", "Treg", "Monocytes"]
+from bilan_immuno_twin.bilan import PANEL
+
+POPULATIONS = list(PANEL)
 
 CYTOKINES = ["IFNg", "IL10", "TNFa", "IL6", "IL4", "IL17"]
 
