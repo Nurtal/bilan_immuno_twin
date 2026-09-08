@@ -123,3 +123,24 @@ def test_cli_simulate_unknown_perturb_fails_clearly(bilan_file: Path) -> None:
     result = _run_cli("simulate", str(bilan_file), "--perturb", "vaccine-x")
     assert result.returncode == 2
     assert "unknown perturbation" in result.stderr
+
+
+def test_cli_simulate_emits_response_score_and_flags(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28", "--perturb", "anti-PD1")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    response = parsed["response"]
+    assert response["therapy"] == "anti-PD1"
+    assert isinstance(response["score"], float)
+    assert isinstance(response["reference_score"], float)
+    assert response["interpretation"] in ("favorable", "neutral", "unfavorable")
+    assert isinstance(response["is_differential"], bool)
+    assert isinstance(response["unexpected_populations"], list)
+    assert set(response["folds"]) == set(PANEL)
+
+
+def test_cli_simulate_no_perturb_has_no_response_bundle(bilan_file: Path) -> None:
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "28")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    assert "response" not in parsed

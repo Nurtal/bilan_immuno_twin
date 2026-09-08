@@ -12,6 +12,7 @@ import numpy as np
 from bilan_immuno_twin.bilan import BilanError, parse_bilan
 from bilan_immuno_twin.graph import KineticParameters, POPULATIONS
 from bilan_immuno_twin.perturbation import PerturbationError, apply_perturbation, get_perturbation
+from bilan_immuno_twin.response import evaluate_response, reference_score
 from bilan_immuno_twin.simulation import default_initial_state, simulate
 
 POPULATION_LABELS = {
@@ -85,6 +86,7 @@ def _cmd_simulate(args: argparse.Namespace) -> int:
             perturbed, x0, horizon=args.horizon, adaptive=args.adaptive
         )
         output["comparison"] = _comparison(output["unperturbed"], output["perturbed"])
+        output["response"] = _response_summary(args.perturb, output, horizon=args.horizon)
     else:
         output = _simulate_output(baseline, x0, horizon=args.horizon, adaptive=args.adaptive)
 
@@ -110,6 +112,28 @@ def _comparison(unperturbed: dict, perturbed: dict) -> dict:
         direction = "up" if (fold or 1.0) > 1.0 else ("down" if (fold or 1.0) < 1.0 else "flat")
         comparison[pop] = {"fold_change": fold, "direction": direction}
     return comparison
+
+
+def _response_summary(therapy: str, output: dict, horizon: float) -> dict:
+    unperturbed = output["unperturbed"]["populations"]
+    perturbed = output["perturbed"]["populations"]
+    base_final = {pop: unperturbed[pop]["values"][-1] for pop in POPULATIONS}
+    treat_final = {pop: perturbed[pop]["values"][-1] for pop in POPULATIONS}
+    response = evaluate_response(
+        therapy,
+        base_final,
+        treat_final,
+        reference_score=reference_score(therapy, horizon=horizon),
+    )
+    return {
+        "score": response.score,
+        "therapy": therapy,
+        "interpretation": response.interpretation,
+        "reference_score": response.reference_score,
+        "is_differential": response.is_differential,
+        "unexpected_populations": response.unexpected,
+        "folds": response.folds,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
