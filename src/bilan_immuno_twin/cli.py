@@ -263,6 +263,13 @@ def _simulate_tables(args: argparse.Namespace, output: dict) -> list[str]:
             trajectory_csv(output["perturbed"], scenario="perturbed", include_header=False),
             comparison_csv(output["comparison"]),
             response_csv(output["response"]),
+            metadata_csv({
+                "perturbation": output["perturbation"],
+                **{
+                    f"parameter_changes:{identifier}": entry["interpretation"]
+                    for identifier, entry in output["parameter_changes"].items()
+                },
+            }),
         ]
     return [trajectory_csv(output, scenario="baseline")]
 

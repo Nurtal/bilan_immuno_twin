@@ -273,6 +273,16 @@ def test_cli_simulate_csv_perturb_also_emits_comparison_and_score(bilan_file: Pa
     assert header in result.stdout
 
 
+def test_cli_simulate_csv_perturb_emits_perturbation_metadata(bilan_file: Path) -> None:
+    """US #21/#22 — the CSV what-if carries the same treatment identity as JSON."""
+    result = _run_cli("simulate", str(bilan_file), "--horizon", "2", "--format", "csv",
+                      "--perturb", "anti-PD1")
+    assert result.returncode == 0
+    assert "key,value" in result.stdout
+    assert "perturbation,anti-PD1" in result.stdout
+    assert "parameter_changes:growth:CD8,+40%" in result.stdout
+
+
 def test_cli_simulate_csv_no_perturb_has_no_score_table(bilan_file: Path) -> None:
     result = _run_cli("simulate", str(bilan_file), "--horizon", "2", "--format", "csv")
     assert result.returncode == 0

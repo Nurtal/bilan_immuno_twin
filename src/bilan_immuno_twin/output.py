@@ -103,6 +103,16 @@ def calibration_csv(growth: Mapping[str, float], intervals: Mapping[str, Sequenc
 
 
 def metadata_csv(meta: Mapping[str, object]) -> str:
-    """Generic two-column table of key/value metadata (e.g. calibration quality)."""
-    rows = [["key", "value"], *[[key, str(value)] for key, value in meta.items()]]
+    """Two-column table of key/value metadata (e.g. perturbation identity,
+    calibration quality), where values may be numbers, strings or lists of
+    strings flattened with ``;``."""
+    rows = [["key", "value"]]
+    for key, value in meta.items():
+        if isinstance(value, str):
+            text = value
+        elif isinstance(value, (list, tuple)):
+            text = ";".join(str(item) for item in value)
+        else:
+            text = str(value)
+        rows.append([key, text])
     return _render(rows)
